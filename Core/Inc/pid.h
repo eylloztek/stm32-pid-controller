@@ -26,6 +26,7 @@ typedef struct{
 void PID_Init(PID_Controller_t *pid, float Kp, float Ki, float Kd,float sampleTime, float minOutput, float maxOutput);
 void PID_SetPoint(PID_Controller_t *pid, float setPoint);
 float PID_GetSetPoint(PID_Controller_t *pid);
-
+float PID_Compute(PID_Controller_t *pid, float actualValue);
+void PID_Reset(PID_Controller_t *pid);
 
 #endif /* INC_PID_H_ */
