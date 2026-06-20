@@ -18,7 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
+#include "pid.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -43,6 +43,9 @@
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+
+PID_Controller_t pid;
+float setPoint = 0;
 
 /* USER CODE END PV */
 
@@ -90,7 +93,8 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  PID_Init(&pid, 10.0f, 3.0f, 0.1f, 0.1f, 0.0f, 100.0f);
+  PID_SetPoint(&pid, 25.0f);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -100,6 +104,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  setPoint = PID_GetSetPoint(&pid);
   }
   /* USER CODE END 3 */
 }
