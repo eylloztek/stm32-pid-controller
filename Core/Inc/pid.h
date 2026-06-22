@@ -29,4 +29,12 @@ float PID_GetSetPoint(PID_Controller_t *pid);
 float PID_Compute(PID_Controller_t *pid, float actualValue);
 void PID_Reset(PID_Controller_t *pid);
 
+float PID_GetKp(PID_Controller_t *pid);
+float PID_GetKi(PID_Controller_t *pid);
+float PID_GetKd(PID_Controller_t *pid);
+
+void PID_SetKp(PID_Controller_t *pid, float Kp);
+void PID_SetKi(PID_Controller_t *pid, float Ki);
+void PID_SetKd(PID_Controller_t *pid, float Kd);
+
 #endif /* INC_PID_H_ */

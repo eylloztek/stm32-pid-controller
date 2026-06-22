@@ -66,3 +66,27 @@ void PID_Reset(PID_Controller_t *pid) {
 	pid->integral = 0.0f;
 	pid->prevError = 0.0f;
 }
+
+float PID_GetKp(PID_Controller_t *pid){
+	return pid->Kp;
+}
+
+float PID_GetKi(PID_Controller_t *pid){
+	return pid->Ki;
+}
+
+float PID_GetKd(PID_Controller_t *pid){
+	return pid->Kd;
+}
+
+void PID_SetKp(PID_Controller_t *pid, float Kp){
+	pid->Kp = Kp;
+}
+
+void PID_SetKi(PID_Controller_t *pid, float Ki){
+	pid->Ki = Ki;
+}
+
+void PID_SetKd(PID_Controller_t *pid, float Kd){
+	pid->Kd = Kd;
+}
