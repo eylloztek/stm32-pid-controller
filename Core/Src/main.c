@@ -35,6 +35,8 @@
 /* USER CODE BEGIN PD */
 
 #define VSTEP 3.3/4096
+#define TX_BUFFER_SIZE 64
+#define RX_BUFFER_SIZE 16
 
 /* USER CODE END PD */
 
@@ -54,7 +56,8 @@ UART_HandleTypeDef huart2;
 
 PID_Controller_t pid;
 volatile uint32_t adcValue = 0;
-
+float voltage = 0;
+char uartTXBuffer[TX_BUFFER_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -67,7 +70,7 @@ static void MX_DAC_Init(void);
 int _write(int file, char *ptr, int len);
 float readVoltage(ADC_HandleTypeDef *hadc, volatile uint32_t *adcValue);
 uint16_t mapPercentageToDAC(uint8_t percent);
-float voltage = 0;
+
 
 /* USER CODE END PFP */
 
@@ -158,6 +161,9 @@ int main(void) {
 			HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, mapPercentageToDAC((uint16_t) pid.output));
 
 			printf("SetPoint: %.2f Voltage: %.2f PIDOutput: %.2f\r\n", pid.setPoint, voltage, pid.output);
+			snprintf(uartTXBuffer, sizeof(uartTXBuffer), "SetPoint: %.2f Voltage: %.2f PIDOutput: %.2f\r\n", pid.setPoint, voltage, pid.output);
+
+			HAL_UART_Transmit(&huart2, (uint8_t*) uartTXBuffer, strlen(uartTXBuffer), HAL_MAX_DELAY);
 
 			lastTime = currentTime;
 		}
