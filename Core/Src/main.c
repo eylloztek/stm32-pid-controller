@@ -66,6 +66,7 @@ static void MX_DAC_Init(void);
 /* USER CODE BEGIN PFP */
 int _write(int file, char *ptr, int len);
 float readVoltage(ADC_HandleTypeDef *hadc, volatile uint32_t *adcValue);
+uint16_t mapPercentageToDAC(uint8_t percent);
 float voltage = 0;
 
 /* USER CODE END PFP */
@@ -93,6 +94,13 @@ float readVoltage(ADC_HandleTypeDef *hadc, volatile uint32_t *adcValue) {
 	voltage = (float) (*adcValue * VSTEP);
 
 	return voltage;
+}
+
+uint16_t mapPercentageToDAC(uint8_t percent){
+	if (percent > 100){
+		percent = 100;
+	}
+	return (uint16_t) (((float)percent/100.0f) * 4095.0f + 0.5f);
 }
 
 /* USER CODE END 0 */
@@ -141,8 +149,8 @@ int main(void) {
 
 		/* USER CODE BEGIN 3 */
 
-		for (int i = 0; i < 4095; i++) {
-			HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, i);
+		for (int i = 0; i <= 100; i++) {
+			HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, mapPercentageToDAC(i));
 			voltage = readVoltage(&hadc1, &adcValue);
 			printf("Voltage = %.2f\r\n", voltage);
 			HAL_Delay(5);
