@@ -137,9 +137,10 @@ int main(void) {
 	MX_ADC1_Init();
 	MX_DAC_Init();
 	/* USER CODE BEGIN 2 */
-	PID_Init(&pid, 10.0f, 3.0f, 0.1f, 0.1f, 0.0f, 100.0f);
-	PID_SetPoint(&pid, 25.0f);
+	PID_Init(&pid, 20.0f, 15.0f, 0.2f, 0.1f, 0.0f, 100.0f);
+	PID_SetPoint(&pid, 2.5f);
 	HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
+	uint32_t lastTime = HAL_GetTick();
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
@@ -149,12 +150,18 @@ int main(void) {
 
 		/* USER CODE BEGIN 3 */
 
-		for (int i = 0; i <= 100; i++) {
-			HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, mapPercentageToDAC(i));
+		uint32_t currentTime = HAL_GetTick();
+		if (currentTime - lastTime >= 100) {
 			voltage = readVoltage(&hadc1, &adcValue);
-			printf("Voltage = %.2f\r\n", voltage);
-			HAL_Delay(5);
+			pid.output = PID_Compute(&pid, voltage);
+
+			HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, mapPercentageToDAC((uint16_t) pid.output));
+
+			printf("SetPoint: %.2f Voltage: %.2f PIDOutput: %.2f\r\n", pid.setPoint, voltage, pid.output);
+
+			lastTime = currentTime;
 		}
+		HAL_Delay(5);
 
 	}
 	/* USER CODE END 3 */
