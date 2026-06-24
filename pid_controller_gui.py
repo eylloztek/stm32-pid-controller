@@ -24,7 +24,7 @@ class PIDControllerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("STM32 PID Controller")
-        self.root.geometry("1050x620")
+        self.root.geometry("1050x800")
         self.root.resizable(False, False)
 
         self.serial_port = None
@@ -42,6 +42,13 @@ class PIDControllerGUI:
 
         self.sample_index = 0
         self.current_setpoint = 0.0
+
+        self.sample_time_s = 0.1  # 100 ms sample time
+
+        self.rise_time_var = tk.StringVar(value="--")
+        self.settling_time_var = tk.StringVar(value="--")
+        self.overshoot_var = tk.StringVar(value="--")
+        self.steady_state_error_var = tk.StringVar(value="--")
 
         self.create_widgets()
         self.refresh_ports()
@@ -200,6 +207,43 @@ class PIDControllerGUI:
         control_frame = tk.Frame(left_frame, bg="#d7e8f6")
         control_frame.pack(fill=tk.X, pady=20)
 
+        metrics_frame = tk.LabelFrame(
+            left_frame,
+            text="Response Metrics",
+            bg="#d7e8f6",
+            padx=10,
+            pady=10
+        )
+        metrics_frame.pack(fill=tk.X, pady=10)
+
+        tk.Label(metrics_frame, text="Rise Time:", bg="#d7e8f6").grid(
+            row=0, column=0, sticky="w", pady=4
+        )
+        tk.Label(metrics_frame, textvariable=self.rise_time_var, bg="#d7e8f6").grid(
+            row=0, column=1, sticky="w", padx=8
+        )
+
+        tk.Label(metrics_frame, text="Settling Time:", bg="#d7e8f6").grid(
+            row=1, column=0, sticky="w", pady=4
+        )
+        tk.Label(metrics_frame, textvariable=self.settling_time_var, bg="#d7e8f6").grid(
+            row=1, column=1, sticky="w", padx=8
+        )
+
+        tk.Label(metrics_frame, text="Overshoot:", bg="#d7e8f6").grid(
+            row=2, column=0, sticky="w", pady=4
+        )
+        tk.Label(metrics_frame, textvariable=self.overshoot_var, bg="#d7e8f6").grid(
+            row=2, column=1, sticky="w", padx=8
+        )
+
+        tk.Label(metrics_frame, text="Steady State Error:", bg="#d7e8f6").grid(
+            row=3, column=0, sticky="w", pady=4
+        )
+        tk.Label(metrics_frame, textvariable=self.steady_state_error_var, bg="#d7e8f6").grid(
+            row=3, column=1, sticky="w", padx=8
+        )
+
         self.start_button = tk.Button(
             control_frame,
             text="START",
@@ -262,12 +306,7 @@ class PIDControllerGUI:
         self.canvas = FigureCanvasTkAgg(self.figure, master=graph_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        footer = tk.Label(
-            main_frame,
-            text="STM32 PID Controller - Python GUI",
-            bg="#d7e8f6"
-        )
-        footer.place(x=440, y=590)
+        
 
     def set_dynamic_ylim(self, axis, values, min_span, margin_ratio=0.15):
         y_min = min(values)
@@ -421,6 +460,7 @@ class PIDControllerGUI:
                 else:
                     self.pid_output_data.append(pid_output)
 
+                self.update_response_metrics()
         self.root.after(20, self.process_serial_queue)
 
     def parse_uart_data(self, line):
@@ -492,6 +532,134 @@ class PIDControllerGUI:
             return f"{value:.1f}".rstrip("0").rstrip(".")
 
         return f"{value:.0f}"
+    
+    def reset_metrics(self):
+        self.rise_time_var.set("--")
+        self.settling_time_var.set("--")
+        self.overshoot_var.set("--")
+        self.steady_state_error_var.set("--")
+
+
+    def update_response_metrics(self):
+        metrics = self.calculate_response_metrics()
+
+        if metrics is None:
+            self.reset_metrics()
+            return
+
+        rise_time = metrics["rise_time"]
+        settling_time = metrics["settling_time"]
+        overshoot_percent = metrics["overshoot_percent"]
+        overshoot_value = metrics["overshoot_value"]
+        steady_state_error = metrics["steady_state_error"]
+
+        if rise_time is None:
+            self.rise_time_var.set("--")
+        else:
+            self.rise_time_var.set(f"{rise_time:.2f} s")
+
+        if settling_time is None:
+            self.settling_time_var.set("--")
+        else:
+            self.settling_time_var.set(f"{settling_time:.2f} s")
+
+        if overshoot_percent is None:
+            self.overshoot_var.set("--")
+        else:
+            self.overshoot_var.set(
+                f"{overshoot_percent:.2f} % ({overshoot_value:.3f} V)"
+            )
+
+        self.steady_state_error_var.set(f"{steady_state_error:.4f} V")
+
+
+    def calculate_response_metrics(self):
+        voltage_values = list(self.voltage_data)
+        setpoint_values = list(self.setpoint_data)
+
+        if len(voltage_values) < 5 or len(setpoint_values) < 5:
+            return None
+
+        initial_value = voltage_values[0]
+        final_setpoint = setpoint_values[-1]
+
+        step_amplitude = final_setpoint - initial_value
+        abs_step = abs(step_amplitude)
+
+        min_valid_step = max(0.02 * abs(final_setpoint), 0.01)
+
+        if abs_step < min_valid_step:
+            rise_time = None
+            overshoot_percent = None
+            overshoot_value = 0.0
+        else:
+            direction = 1.0 if step_amplitude > 0.0 else -1.0
+
+            y_10 = initial_value + 0.10 * step_amplitude
+            y_90 = initial_value + 0.90 * step_amplitude
+
+            index_10 = None
+            index_90 = None
+
+            for i, value in enumerate(voltage_values):
+                if index_10 is None:
+                    if direction * (value - y_10) >= 0.0:
+                        index_10 = i
+
+                if index_10 is not None:
+                    if direction * (value - y_90) >= 0.0:
+                        index_90 = i
+                        break
+
+            if index_10 is not None and index_90 is not None:
+                rise_time = (index_90 - index_10) * self.sample_time_s
+            else:
+                rise_time = None
+
+            if direction > 0.0:
+                peak_value = max(voltage_values)
+                overshoot_value = max(0.0, peak_value - final_setpoint)
+            else:
+                peak_value = min(voltage_values)
+                overshoot_value = max(0.0, final_setpoint - peak_value)
+
+            overshoot_percent = (overshoot_value / abs_step) * 100.0
+
+        settling_tolerance = max(0.02 * abs(final_setpoint), 0.01)
+
+        settling_index = None
+
+        for i in range(len(voltage_values)):
+            remaining_values = voltage_values[i:]
+
+            is_settled = all(
+                abs(value - final_setpoint) <= settling_tolerance
+                for value in remaining_values
+            )
+
+            if is_settled:
+                settling_index = i
+                break
+
+        if settling_index is None:
+            settling_time = None
+        else:
+            settling_time = settling_index * self.sample_time_s
+
+        steady_state_window = min(20, len(voltage_values))
+        steady_state_average = (
+            sum(voltage_values[-steady_state_window:]) / steady_state_window
+        )
+
+        steady_state_error = abs(final_setpoint - steady_state_average)
+
+        return {
+            "rise_time": rise_time,
+            "settling_time": settling_time,
+            "overshoot_percent": overshoot_percent,
+            "overshoot_value": overshoot_value,
+            "steady_state_error": steady_state_error
+        }
 
     def update_plot(self):
         self.voltage_line.set_data(self.time_data, self.voltage_data)
@@ -554,8 +722,9 @@ class PIDControllerGUI:
         if value is None:
             return
 
-        self.current_setpoint = value
-        self.send_uart_command(f"SETPOINT:{value}\r\n")
+        if self.send_uart_command(f"SETPOINT:{value}\r\n"):
+            self.current_setpoint = value
+            self.clear_graph()
 
     def send_kp(self):
         value = self.get_float_from_entry(self.kp_entry, "Kp")
@@ -591,6 +760,7 @@ class PIDControllerGUI:
 
     def start_pid(self):
         if self.send_uart_command("START\n"):
+            self.clear_graph()
             self.plot_enabled = True
 
     def stop_pid(self):
@@ -607,6 +777,8 @@ class PIDControllerGUI:
 
         self.ax.set_xlim(0, 100)
         self.ax.set_ylim(0, 5)
+
+        self.reset_metrics()
         self.canvas.draw_idle()
 
     def on_close(self):
