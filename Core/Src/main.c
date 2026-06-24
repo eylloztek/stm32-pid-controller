@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "string.h"
+#include "stdlib.h"
 #include "pid.h"
 /* USER CODE END Includes */
 
@@ -34,9 +35,24 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define VSTEP 3.3/4096
-#define TX_BUFFER_SIZE 64
-#define RX_BUFFER_SIZE 16
+#define VSTEP 					3.3/4096
+#define TX_BUFFER_SIZE 			64
+#define RX_BUFFER_SIZE          64
+
+#define CMD_SETPOINT_LONG       "SETPOINT:"
+#define CMD_SETPOINT_SHORT      "SET_SP:"
+
+#define CMD_KP_LONG             "KP:"
+#define CMD_KP_SHORT            "SET_KP:"
+
+#define CMD_KI_LONG             "KI:"
+#define CMD_KI_SHORT            "SET_KI:"
+
+#define CMD_KD_LONG             "KD:"
+#define CMD_KD_SHORT            "SET_KD:"
+
+#define CMD_START               "START"
+#define CMD_STOP                "STOP"
 
 /* USER CODE END PD */
 
@@ -58,6 +74,12 @@ PID_Controller_t pid;
 volatile uint32_t adcValue = 0;
 float voltage = 0;
 char uartTXBuffer[TX_BUFFER_SIZE];
+
+uint8_t rxChar;
+char messageBuffer[RX_BUFFER_SIZE];
+uint8_t bufferIndex = 0;
+
+volatile uint8_t pidEnabled = 1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -69,9 +91,9 @@ static void MX_DAC_Init(void);
 /* USER CODE BEGIN PFP */
 int _write(int file, char *ptr, int len);
 float readVoltage(ADC_HandleTypeDef *hadc, volatile uint32_t *adcValue);
-uint16_t mapPercentageToDAC(uint8_t percent);
-
-
+uint16_t mapPercentageToDAC(float percent);
+void ProcessUARTCommand(char *command);
+void ClearUARTBuffer(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -99,11 +121,16 @@ float readVoltage(ADC_HandleTypeDef *hadc, volatile uint32_t *adcValue) {
 	return voltage;
 }
 
-uint16_t mapPercentageToDAC(uint8_t percent){
-	if (percent > 100){
-		percent = 100;
+uint16_t mapPercentageToDAC(float percent) {
+	if (percent > 100.0f) {
+		percent = 100.0f;
 	}
-	return (uint16_t) (((float)percent/100.0f) * 4095.0f + 0.5f);
+
+	if (percent < 0.0f) {
+		percent = 0.0f;
+	}
+
+	return (uint16_t) ((percent / 100.0f) * 4095.0f + 0.5f);
 }
 
 /* USER CODE END 0 */
@@ -144,6 +171,7 @@ int main(void) {
 	PID_SetPoint(&pid, 2.5f);
 	HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
 	uint32_t lastTime = HAL_GetTick();
+	HAL_UART_Receive_IT(&huart2, &rxChar, 1);
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
@@ -156,14 +184,23 @@ int main(void) {
 		uint32_t currentTime = HAL_GetTick();
 		if (currentTime - lastTime >= 100) {
 			voltage = readVoltage(&hadc1, &adcValue);
-			pid.output = PID_Compute(&pid, voltage);
+			if (pidEnabled) {
+				pid.output = PID_Compute(&pid, voltage);
+			} else {
+				pid.output = 0.0f;
+			}
 
-			HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, mapPercentageToDAC((uint16_t) pid.output));
+			HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R,
+					mapPercentageToDAC(pid.output));
 
-			printf("SetPoint: %.2f Voltage: %.2f PIDOutput: %.2f\r\n", pid.setPoint, voltage, pid.output);
-			snprintf(uartTXBuffer, sizeof(uartTXBuffer), "SetPoint: %.2f Voltage: %.2f PIDOutput: %.2f\r\n", pid.setPoint, voltage, pid.output);
+			printf("SetPoint: %.3f Voltage: %.4f PIDOutput: %.3f\r\n",
+					pid.setPoint, voltage, pid.output);
+			snprintf(uartTXBuffer, sizeof(uartTXBuffer),
+					"SetPoint: %.3f Voltage: %.4f PIDOutput: %.3f\r\n",
+					pid.setPoint, voltage, pid.output);
 
-			HAL_UART_Transmit(&huart2, (uint8_t*) uartTXBuffer, strlen(uartTXBuffer), HAL_MAX_DELAY);
+			HAL_UART_Transmit(&huart2, (uint8_t*) uartTXBuffer,
+					strlen(uartTXBuffer), HAL_MAX_DELAY);
 
 			lastTime = currentTime;
 		}
@@ -371,6 +408,67 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
+
+void ClearUARTBuffer(void) {
+	bufferIndex = 0;
+	memset(messageBuffer, 0, RX_BUFFER_SIZE);
+}
+
+void ProcessUARTCommand(char *command) {
+	if (strncmp(command, CMD_SETPOINT_LONG, strlen(CMD_SETPOINT_LONG)) == 0) {
+		float userSetPoint = atof(command + strlen(CMD_SETPOINT_LONG));
+		PID_SetPoint(&pid, userSetPoint);
+	} else if (strncmp(command, CMD_SETPOINT_SHORT, strlen(CMD_SETPOINT_SHORT))
+			== 0) {
+		float userSetPoint = atof(command + strlen(CMD_SETPOINT_SHORT));
+		PID_SetPoint(&pid, userSetPoint);
+	} else if (strncmp(command, CMD_KP_LONG, strlen(CMD_KP_LONG)) == 0) {
+		float userKp = atof(command + strlen(CMD_KP_LONG));
+		PID_SetKp(&pid, userKp);
+	} else if (strncmp(command, CMD_KP_SHORT, strlen(CMD_KP_SHORT)) == 0) {
+		float userKp = atof(command + strlen(CMD_KP_SHORT));
+		PID_SetKp(&pid, userKp);
+	} else if (strncmp(command, CMD_KI_LONG, strlen(CMD_KI_LONG)) == 0) {
+		float userKi = atof(command + strlen(CMD_KI_LONG));
+		PID_SetKi(&pid, userKi);
+	} else if (strncmp(command, CMD_KI_SHORT, strlen(CMD_KI_SHORT)) == 0) {
+		float userKi = atof(command + strlen(CMD_KI_SHORT));
+		PID_SetKi(&pid, userKi);
+	} else if (strncmp(command, CMD_KD_LONG, strlen(CMD_KD_LONG)) == 0) {
+		float userKd = atof(command + strlen(CMD_KD_LONG));
+		PID_SetKd(&pid, userKd);
+	} else if (strncmp(command, CMD_KD_SHORT, strlen(CMD_KD_SHORT)) == 0) {
+		float userKd = atof(command + strlen(CMD_KD_SHORT));
+		PID_SetKd(&pid, userKd);
+	} else if (strcmp(command, CMD_START) == 0) {
+		pidEnabled = 1;
+	} else if (strcmp(command, CMD_STOP) == 0) {
+		pidEnabled = 0;
+	}
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	if (huart->Instance == USART2) {
+
+		if (rxChar == '\r' || rxChar == '\n') {
+			if (bufferIndex > 0) {
+				messageBuffer[bufferIndex] = '\0';
+				ProcessUARTCommand(messageBuffer);
+			}
+
+			ClearUARTBuffer();
+		} else {
+			if (bufferIndex < RX_BUFFER_SIZE - 1) {
+				messageBuffer[bufferIndex++] = (char) rxChar;
+				messageBuffer[bufferIndex] = '\0';
+			} else {
+				ClearUARTBuffer();
+			}
+		}
+
+		HAL_UART_Receive_IT(&huart2, &rxChar, 1);
+	}
+}
 
 /* USER CODE END 4 */
 
