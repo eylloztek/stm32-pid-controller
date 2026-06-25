@@ -7,6 +7,7 @@ import re
 import threading
 from collections import deque
 
+from opentelemetry import metrics
 import serial
 import serial.tools.list_ports
 
@@ -49,6 +50,12 @@ class PIDControllerGUI:
         self.settling_time_var = tk.StringVar(value="--")
         self.overshoot_var = tk.StringVar(value="--")
         self.steady_state_error_var = tk.StringVar(value="--")
+
+        self.latched_rise_time = None
+        self.latched_settling_time = None
+        self.latched_overshoot_percent = None
+        self.latched_overshoot_value = None
+        self.latest_steady_state_error = None
 
         self.create_widgets()
         self.refresh_ports()
@@ -294,9 +301,26 @@ class PIDControllerGUI:
         self.ax_pid.set_ylabel("PID Output (%)")
         self.ax_pid.set_ylim(0, 100)
 
-        self.voltage_line, = self.ax.plot([], [], label="Voltage")
-        self.setpoint_line, = self.ax.plot([], [], label="Set Point")
-        self.pid_output_line, = self.ax_pid.plot([], [], label="PID Output")
+        self.voltage_line, = self.ax.plot(
+            [], [],
+            label="Voltage",
+            color="#1f77b4",
+            linewidth=1.8
+        )
+
+        self.setpoint_line, = self.ax.plot(
+            [], [],
+            label="Set Point",
+            color="#ff7f0e",
+            linewidth=1.8
+        )
+
+        self.pid_output_line, = self.ax_pid.plot(
+            [], [],
+            label="PID Output",
+            color="#2ca02c",
+            linewidth=1.8
+        )
 
         lines1, labels1 = self.ax.get_legend_handles_labels()
         lines2, labels2 = self.ax_pid.get_legend_handles_labels()
@@ -534,17 +558,50 @@ class PIDControllerGUI:
         return f"{value:.0f}"
     
     def reset_metrics(self):
+
+        self.latched_rise_time = None
+        self.latched_settling_time = None
+        self.latched_overshoot_percent = None
+        self.latched_overshoot_value = None
+        self.latest_steady_state_error = None
+
         self.rise_time_var.set("--")
         self.settling_time_var.set("--")
         self.overshoot_var.set("--")
         self.steady_state_error_var.set("--")
 
 
+    def refresh_metric_labels(self):
+        if self.latched_rise_time is None:
+            self.rise_time_var.set("--")
+        else:
+            self.rise_time_var.set(f"{self.latched_rise_time:.2f} s")
+
+        if self.latched_settling_time is None:
+            self.settling_time_var.set("--")
+        else:
+            self.settling_time_var.set(f"{self.latched_settling_time:.2f} s")
+
+        if self.latched_overshoot_percent is None:
+            self.overshoot_var.set("--")
+        else:
+            self.overshoot_var.set(
+                f"{self.latched_overshoot_percent:.2f} % "
+                f"({self.latched_overshoot_value:.3f} V)"
+            )
+
+        if self.latest_steady_state_error is None:
+            self.steady_state_error_var.set("--")
+        else:
+            self.steady_state_error_var.set(
+                f"{self.latest_steady_state_error:.4f} V"
+            )
+
     def update_response_metrics(self):
         metrics = self.calculate_response_metrics()
 
         if metrics is None:
-            self.reset_metrics()
+            self.refresh_metric_labels()
             return
 
         rise_time = metrics["rise_time"]
@@ -552,25 +609,24 @@ class PIDControllerGUI:
         overshoot_percent = metrics["overshoot_percent"]
         overshoot_value = metrics["overshoot_value"]
         steady_state_error = metrics["steady_state_error"]
+        has_overshoot = metrics["has_overshoot"]
 
-        if rise_time is None:
-            self.rise_time_var.set("--")
-        else:
-            self.rise_time_var.set(f"{rise_time:.2f} s")
+        if self.latched_rise_time is None and rise_time is not None:
+            self.latched_rise_time = rise_time
 
-        if settling_time is None:
-            self.settling_time_var.set("--")
-        else:
-            self.settling_time_var.set(f"{settling_time:.2f} s")
+        if self.latched_settling_time is None and settling_time is not None:
+            self.latched_settling_time = settling_time
 
-        if overshoot_percent is None:
-            self.overshoot_var.set("--")
-        else:
-            self.overshoot_var.set(
-                f"{overshoot_percent:.2f} % ({overshoot_value:.3f} V)"
-            )
+            self.latched_overshoot_percent = overshoot_percent
+            self.latched_overshoot_value = overshoot_value
 
-        self.steady_state_error_var.set(f"{steady_state_error:.4f} V")
+        if self.latched_settling_time is None and has_overshoot:
+            self.latched_overshoot_percent = overshoot_percent
+            self.latched_overshoot_value = overshoot_value
+
+        self.latest_steady_state_error = steady_state_error
+
+        self.refresh_metric_labels()
 
 
     def calculate_response_metrics(self):
@@ -588,11 +644,12 @@ class PIDControllerGUI:
 
         min_valid_step = max(0.02 * abs(final_setpoint), 0.01)
 
-        if abs_step < min_valid_step:
-            rise_time = None
-            overshoot_percent = None
-            overshoot_value = 0.0
-        else:
+        rise_time = None
+        overshoot_percent = None
+        overshoot_value = 0.0
+        has_overshoot = False
+
+        if abs_step >= min_valid_step:
             direction = 1.0 if step_amplitude > 0.0 else -1.0
 
             y_10 = initial_value + 0.10 * step_amplitude
@@ -613,8 +670,6 @@ class PIDControllerGUI:
 
             if index_10 is not None and index_90 is not None:
                 rise_time = (index_90 - index_10) * self.sample_time_s
-            else:
-                rise_time = None
 
             if direction > 0.0:
                 peak_value = max(voltage_values)
@@ -625,21 +680,26 @@ class PIDControllerGUI:
 
             overshoot_percent = (overshoot_value / abs_step) * 100.0
 
+            overshoot_threshold = max(0.005, 0.002 * abs(final_setpoint))
+            has_overshoot = overshoot_value > overshoot_threshold
+
         settling_tolerance = max(0.02 * abs(final_setpoint), 0.01)
 
         settling_index = None
+        settling_required_samples = 20
 
-        for i in range(len(voltage_values)):
-            remaining_values = voltage_values[i:]
+        if len(voltage_values) >= settling_required_samples:
+            for i in range(len(voltage_values) - settling_required_samples + 1):
+                remaining_values = voltage_values[i:]
 
-            is_settled = all(
-                abs(value - final_setpoint) <= settling_tolerance
-                for value in remaining_values
-            )
+                is_settled = all(
+                    abs(value - final_setpoint) <= settling_tolerance
+                    for value in remaining_values
+                )
 
-            if is_settled:
-                settling_index = i
-                break
+                if is_settled:
+                    settling_index = i
+                    break
 
         if settling_index is None:
             settling_time = None
@@ -658,9 +718,9 @@ class PIDControllerGUI:
             "settling_time": settling_time,
             "overshoot_percent": overshoot_percent,
             "overshoot_value": overshoot_value,
+            "has_overshoot": has_overshoot,
             "steady_state_error": steady_state_error
         }
-
     def update_plot(self):
         self.voltage_line.set_data(self.time_data, self.voltage_data)
         self.setpoint_line.set_data(self.time_data, self.setpoint_data)
@@ -732,7 +792,8 @@ class PIDControllerGUI:
         if value is None:
             return
 
-        self.send_uart_command(f"KP:{value}\r\n")
+        if self.send_uart_command(f"KP:{value}\r\n"):
+            self.clear_graph()
 
     def send_ki(self):
         value = self.get_float_from_entry(self.ki_entry, "Ki")
@@ -740,7 +801,8 @@ class PIDControllerGUI:
         if value is None:
             return
 
-        self.send_uart_command(f"KI:{value}\r\n")
+        if self.send_uart_command(f"KI:{value}\r\n"):
+            self.clear_graph()
 
     def send_kd(self):
         value = self.get_float_from_entry(self.kd_entry, "Kd")
@@ -748,7 +810,8 @@ class PIDControllerGUI:
         if value is None:
             return
 
-        self.send_uart_command(f"KD:{value}\r\n")
+        if self.send_uart_command(f"KD:{value}\r\n"):
+            self.clear_graph()
 
     def get_float_from_entry(self, entry, name):
         try:
@@ -759,6 +822,9 @@ class PIDControllerGUI:
             return None
 
     def start_pid(self):
+        if not self.send_all_parameters():
+            return
+
         if self.send_uart_command("START\n"):
             self.clear_graph()
             self.plot_enabled = True
@@ -777,6 +843,7 @@ class PIDControllerGUI:
 
         self.ax.set_xlim(0, 100)
         self.ax.set_ylim(0, 5)
+        self.ax_pid.set_ylim(0, 100)
 
         self.reset_metrics()
         self.canvas.draw_idle()
@@ -785,6 +852,28 @@ class PIDControllerGUI:
         self.disconnect_serial()
         self.root.destroy()
 
+    def send_all_parameters(self):
+        setpoint = self.get_float_from_entry(self.setpoint_entry, "Set Point")
+        kp = self.get_float_from_entry(self.kp_entry, "Kp")
+        ki = self.get_float_from_entry(self.ki_entry, "Ki")
+        kd = self.get_float_from_entry(self.kd_entry, "Kd")
+
+        if setpoint is None or kp is None or ki is None or kd is None:
+            return False
+
+        commands = [
+            f"SETPOINT:{setpoint}\r\n",
+            f"KP:{kp}\r\n",
+            f"KI:{ki}\r\n",
+            f"KD:{kd}\r\n"
+        ]
+
+        for command in commands:
+            if not self.send_uart_command(command):
+                return False
+
+        self.current_setpoint = setpoint
+        return True
 
 if __name__ == "__main__":
     root = tk.Tk()

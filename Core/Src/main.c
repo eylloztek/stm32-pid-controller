@@ -79,7 +79,7 @@ uint8_t rxChar;
 char messageBuffer[RX_BUFFER_SIZE];
 uint8_t bufferIndex = 0;
 
-volatile uint8_t pidEnabled = 1;
+volatile uint8_t pidEnabled = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
