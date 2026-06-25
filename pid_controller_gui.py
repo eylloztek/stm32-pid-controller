@@ -16,45 +16,102 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator, FuncFormatter
 
 
+## @class PIDControllerGUI
+#  @brief Tkinter-based GUI application for monitoring and controlling an STM32 PID controller.
+#
+#  This class creates a serial communication interface, parameter input fields,
+#  real-time plots and response metric displays for a PID controller running on STM32.
 class PIDControllerGUI:
+
+    ## @brief Regular expression pattern used to parse key-value pairs from UART messages.
+    #
+    #  Supported examples:
+    #  - SetPoint: 2.50
+    #  - Voltage=2.48
+    #  - PIDOutput: 75.2
     UART_VALUE_PATTERN = re.compile(
         r"([A-Za-z][A-Za-z0-9_ -]*)\s*[:=]\s*"
         r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
     )
 
+    ## @brief Initializes the PID controller GUI.
+    #
+    #  This constructor initializes window settings, serial communication variables,
+    #  plotting buffers, response metric variables and starts periodic GUI update tasks.
+    #
+    #  @param root Main Tkinter root window.
     def __init__(self, root):
         self.root = root
         self.root.title("STM32 PID Controller")
         self.root.geometry("1050x800")
         self.root.resizable(False, False)
 
+        ## @brief Serial port object used for UART communication.
         self.serial_port = None
+
+        ## @brief Background thread used for reading UART data.
         self.serial_thread = None
+
+        ## @brief Serial thread running state flag.
         self.running = False
+
+        ## @brief Plot update enable flag.
         self.plot_enabled = False
 
+        ## @brief Queue used to safely transfer UART data from serial thread to GUI thread.
         self.rx_queue = queue.Queue()
 
+        ## @brief Maximum number of data points displayed on the graph.
         self.max_points = 200
+
+        ## @brief Sample index data buffer.
         self.time_data = deque(maxlen=self.max_points)
+
+        ## @brief Voltage data buffer.
         self.voltage_data = deque(maxlen=self.max_points)
+
+        ## @brief Setpoint data buffer.
         self.setpoint_data = deque(maxlen=self.max_points)
+
+        ## @brief PID output data buffer.
         self.pid_output_data = deque(maxlen=self.max_points)
 
+        ## @brief Current sample counter.
         self.sample_index = 0
+
+        ## @brief Latest setpoint value received from UART or entered by the user.
         self.current_setpoint = 0.0
 
+        ## @brief Sampling period in seconds.
+        #
+        #  This value should match the STM32 UART transmission period.
         self.sample_time_s = 0.1  # 100 ms sample time
 
+        ## @brief Tkinter string variable used to display rise time.
         self.rise_time_var = tk.StringVar(value="--")
+
+        ## @brief Tkinter string variable used to display settling time.
         self.settling_time_var = tk.StringVar(value="--")
+
+        ## @brief Tkinter string variable used to display overshoot.
         self.overshoot_var = tk.StringVar(value="--")
+
+        ## @brief Tkinter string variable used to display steady-state error.
         self.steady_state_error_var = tk.StringVar(value="--")
 
+        ## @brief Stored rise time value after it is calculated.
         self.latched_rise_time = None
+
+        ## @brief Stored settling time value after it is calculated.
         self.latched_settling_time = None
+
+        ## @brief Stored overshoot percentage value.
         self.latched_overshoot_percent = None
+
+        ## @brief Stored overshoot voltage value.
         self.latched_overshoot_value = None
+
+        ## @brief Latest calculated steady-state error value.
         self.latest_steady_state_error = None
 
         self.create_widgets()
@@ -62,6 +119,10 @@ class PIDControllerGUI:
         self.update_plot()
         self.process_serial_queue()
 
+    ## @brief Creates and places all GUI widgets.
+    #
+    #  This function creates connection controls, PID parameter inputs,
+    #  response metric labels and Matplotlib graph components.
     def create_widgets(self):
         main_frame = tk.Frame(self.root, bg="#d7e8f6")
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -330,8 +391,16 @@ class PIDControllerGUI:
         self.canvas = FigureCanvasTkAgg(self.figure, master=graph_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        
-
+    ## @brief Dynamically sets the y-axis limits based on given values.
+    #
+    #  This function adjusts the selected axis limits by using the minimum and
+    #  maximum values in the provided data list. A minimum span is applied to
+    #  prevent excessive zooming when the data range is very small.
+    #
+    #  @param axis Matplotlib axis object whose y-limits will be updated.
+    #  @param values Data values used for calculating the axis limits.
+    #  @param min_span Minimum allowed y-axis span.
+    #  @param margin_ratio Ratio used to add margin around the data range.
     def set_dynamic_ylim(self, axis, values, min_span, margin_ratio=0.15):
         y_min = min(values)
         y_max = max(values)
@@ -349,6 +418,16 @@ class PIDControllerGUI:
 
         axis.set_ylim(y_min, y_max)
 
+    ## @brief Creates a PID parameter input row.
+    #
+    #  This function creates a label, entry field and SET button for a single
+    #  PID parameter.
+    #
+    #  @param parent Parent Tkinter widget.
+    #  @param label_text Text displayed next to the entry field.
+    #  @param row Grid row index.
+    #  @param command Callback function executed when the SET button is pressed.
+    #  @return Created Tkinter Entry widget.
     def create_parameter_row(self, parent, label_text, row, command):
         tk.Label(parent, text=label_text, bg="#d7e8f6").grid(
             row=row,
@@ -365,6 +444,10 @@ class PIDControllerGUI:
 
         return entry
 
+    ## @brief Refreshes the available serial COM ports.
+    #
+    #  This function scans connected serial ports and updates the COM port
+    #  selection combobox.
     def refresh_ports(self):
         previous_selection = self.port_combo.get()
 
@@ -380,6 +463,10 @@ class PIDControllerGUI:
         else:
             self.port_combo.set("")
 
+    ## @brief Opens the selected serial port connection.
+    #
+    #  This function reads serial settings from the GUI, opens the selected
+    #  COM port and starts the background serial reading thread.
     def connect_serial(self):
         if self.serial_port and self.serial_port.is_open:
             return
@@ -423,6 +510,10 @@ class PIDControllerGUI:
             self.status_label.config(text="FAILED", bg="#f2c6c6")
             messagebox.showerror("Serial Error", str(e))
 
+    ## @brief Closes the active serial port connection.
+    #
+    #  This function stops serial reading, closes the serial port and updates
+    #  the GUI connection status.
     def disconnect_serial(self):
         self.running = False
         self.plot_enabled = False
@@ -442,6 +533,10 @@ class PIDControllerGUI:
 
         self.status_label.config(text="DISCONNECTED", bg="#f2c6c6")
 
+    ## @brief Reads UART data in a background thread.
+    #
+    #  This function continuously reads lines from the serial port and places
+    #  valid received lines into the receive queue.
     def read_serial(self):
         while self.running:
             try:
@@ -459,6 +554,11 @@ class PIDControllerGUI:
                     self.rx_queue.put("SERIAL_ERROR")
                 break
 
+    ## @brief Processes received UART lines from the queue.
+    #
+    #  This function runs periodically in the Tkinter main thread. It parses
+    #  received UART messages, updates graph data buffers and refreshes response
+    #  metrics when plotting is enabled.
     def process_serial_queue(self):
         while not self.rx_queue.empty():
             line = self.rx_queue.get()
@@ -487,6 +587,18 @@ class PIDControllerGUI:
                 self.update_response_metrics()
         self.root.after(20, self.process_serial_queue)
 
+    ## @brief Parses a UART data line received from STM32.
+    #
+    #  Supported UART receive formats:
+    #
+    #  SetPoint:3.00 Voltage:2.85 PIDOutput:1.50
+    #  SetPoint: 3.00 Voltage: 2.85
+    #  Setpoint:3.00, Voltage:2.85
+    #  SETPOINT=3.00 VOLTAGE=2.85
+    #
+    #  @param line UART line string received from STM32.
+    #  @return Tuple containing voltage, setpoint and PID output values.
+    #  @retval None Returned if the UART line cannot be parsed.
     def parse_uart_data(self, line):
         """
         Supported UART receive formats:
@@ -526,6 +638,13 @@ class PIDControllerGUI:
 
         return voltage, setpoint, pid_output
 
+    ## @brief Normalizes UART data keys.
+    #
+    #  This function converts a key string to lowercase and removes spaces,
+    #  underscores and hyphens to simplify key matching.
+    #
+    #  @param key Raw key string received from UART data.
+    #  @return Normalized key string.
     @staticmethod
     def normalize_key(key):
         return (
@@ -535,7 +654,15 @@ class PIDControllerGUI:
             .replace("_", "")
             .replace("-", "")
         )
-    
+
+    ## @brief Formats y-axis tick labels.
+    #
+    #  This function formats numeric axis values according to their magnitude
+    #  to keep graph labels readable.
+    #
+    #  @param value Axis tick value.
+    #  @param _ Unused formatter position argument.
+    #  @return Formatted string representation of the axis value.
     @staticmethod
     def format_y_axis(value, _):
         abs_value = abs(value)
@@ -556,7 +683,11 @@ class PIDControllerGUI:
             return f"{value:.1f}".rstrip("0").rstrip(".")
 
         return f"{value:.0f}"
-    
+
+    ## @brief Resets all stored response metric values.
+    #
+    #  This function clears latched rise time, settling time, overshoot and
+    #  steady-state error values and resets their GUI labels.
     def reset_metrics(self):
 
         self.latched_rise_time = None
@@ -570,7 +701,10 @@ class PIDControllerGUI:
         self.overshoot_var.set("--")
         self.steady_state_error_var.set("--")
 
-
+    ## @brief Updates response metric labels on the GUI.
+    #
+    #  This function displays the latest stored response metric values.
+    #  If a metric has not been calculated yet, "--" is shown.
     def refresh_metric_labels(self):
         if self.latched_rise_time is None:
             self.rise_time_var.set("--")
@@ -597,6 +731,11 @@ class PIDControllerGUI:
                 f"{self.latest_steady_state_error:.4f} V"
             )
 
+    ## @brief Updates calculated response metrics.
+    #
+    #  This function calculates response metrics using the current graph data.
+    #  Rise time, settling time and overshoot are latched after valid calculation,
+    #  while steady-state error is updated continuously.
     def update_response_metrics(self):
         metrics = self.calculate_response_metrics()
 
@@ -628,7 +767,13 @@ class PIDControllerGUI:
 
         self.refresh_metric_labels()
 
-
+    ## @brief Calculates PID response metrics from graph data.
+    #
+    #  This function calculates rise time, settling time, overshoot and
+    #  steady-state error using voltage and setpoint data stored in buffers.
+    #
+    #  @return Dictionary containing calculated response metrics.
+    #  @retval None Returned when there is not enough data for calculation.
     def calculate_response_metrics(self):
         voltage_values = list(self.voltage_data)
         setpoint_values = list(self.setpoint_data)
@@ -721,6 +866,11 @@ class PIDControllerGUI:
             "has_overshoot": has_overshoot,
             "steady_state_error": steady_state_error
         }
+
+    ## @brief Updates the Matplotlib graph.
+    #
+    #  This function refreshes voltage, setpoint and PID output data lines,
+    #  dynamically updates axis limits and schedules the next plot update.
     def update_plot(self):
         self.voltage_line.set_data(self.time_data, self.voltage_data)
         self.setpoint_line.set_data(self.time_data, self.setpoint_data)
@@ -762,6 +912,13 @@ class PIDControllerGUI:
         self.canvas.draw_idle()
         self.root.after(50, self.update_plot)
 
+    ## @brief Sends a command string over UART.
+    #
+    #  This function checks whether the serial port is connected and transmits
+    #  the provided command string to STM32.
+    #
+    #  @param command Command string to be sent over UART.
+    #  @return True if transmission succeeds, otherwise False.
     def send_uart_command(self, command):
         if not self.serial_port or not self.serial_port.is_open:
             messagebox.showwarning("Warning", "Serial port is not connected.")
@@ -776,6 +933,10 @@ class PIDControllerGUI:
             messagebox.showerror("Serial Error", str(e))
             return False
 
+    ## @brief Sends the setpoint value to STM32.
+    #
+    #  This function reads the setpoint entry value, sends it through UART
+    #  and clears the graph if the command is transmitted successfully.
     def send_setpoint(self):
         value = self.get_float_from_entry(self.setpoint_entry, "Set Point")
 
@@ -786,6 +947,10 @@ class PIDControllerGUI:
             self.current_setpoint = value
             self.clear_graph()
 
+    ## @brief Sends the proportional gain value to STM32.
+    #
+    #  This function reads the Kp entry value, sends it through UART
+    #  and clears the graph if the command is transmitted successfully.
     def send_kp(self):
         value = self.get_float_from_entry(self.kp_entry, "Kp")
 
@@ -795,6 +960,10 @@ class PIDControllerGUI:
         if self.send_uart_command(f"KP:{value}\r\n"):
             self.clear_graph()
 
+    ## @brief Sends the integral gain value to STM32.
+    #
+    #  This function reads the Ki entry value, sends it through UART
+    #  and clears the graph if the command is transmitted successfully.
     def send_ki(self):
         value = self.get_float_from_entry(self.ki_entry, "Ki")
 
@@ -804,6 +973,10 @@ class PIDControllerGUI:
         if self.send_uart_command(f"KI:{value}\r\n"):
             self.clear_graph()
 
+    ## @brief Sends the derivative gain value to STM32.
+    #
+    #  This function reads the Kd entry value, sends it through UART
+    #  and clears the graph if the command is transmitted successfully.
     def send_kd(self):
         value = self.get_float_from_entry(self.kd_entry, "Kd")
 
@@ -813,6 +986,15 @@ class PIDControllerGUI:
         if self.send_uart_command(f"KD:{value}\r\n"):
             self.clear_graph()
 
+    ## @brief Reads and validates a floating-point value from an entry widget.
+    #
+    #  This function converts the text inside a Tkinter Entry widget to float.
+    #  If conversion fails, an error message is displayed.
+    #
+    #  @param entry Tkinter Entry widget containing the value.
+    #  @param name User-readable parameter name used in error messages.
+    #  @return Converted floating-point value.
+    #  @retval None Returned if the entry value is invalid.
     def get_float_from_entry(self, entry, name):
         try:
             return float(entry.get())
@@ -821,6 +1003,10 @@ class PIDControllerGUI:
             messagebox.showerror("Invalid Value", f"{name} must be a number.")
             return None
 
+    ## @brief Starts PID operation from the GUI.
+    #
+    #  This function sends all PID parameters to STM32, sends the START command,
+    #  clears the graph and enables plotting.
     def start_pid(self):
         if not self.send_all_parameters():
             return
@@ -829,10 +1015,17 @@ class PIDControllerGUI:
             self.clear_graph()
             self.plot_enabled = True
 
+    ## @brief Stops PID operation from the GUI.
+    #
+    #  This function disables plotting and sends the STOP command to STM32.
     def stop_pid(self):
         self.plot_enabled = False
         self.send_uart_command("STOP\n")
 
+    ## @brief Clears all graph data and response metrics.
+    #
+    #  This function clears voltage, setpoint, PID output and sample data buffers,
+    #  resets graph axes and clears response metric labels.
     def clear_graph(self):
         self.time_data.clear()
         self.voltage_data.clear()
@@ -848,10 +1041,19 @@ class PIDControllerGUI:
         self.reset_metrics()
         self.canvas.draw_idle()
 
+    ## @brief Handles GUI close event.
+    #
+    #  This function disconnects the serial port and destroys the Tkinter root window.
     def on_close(self):
         self.disconnect_serial()
         self.root.destroy()
 
+    ## @brief Sends all PID parameters to STM32.
+    #
+    #  This function reads setpoint, Kp, Ki and Kd values from the GUI,
+    #  validates them and sends all parameter commands over UART.
+    #
+    #  @return True if all parameters are sent successfully, otherwise False.
     def send_all_parameters(self):
         setpoint = self.get_float_from_entry(self.setpoint_entry, "Set Point")
         kp = self.get_float_from_entry(self.kp_entry, "Kp")
@@ -875,6 +1077,11 @@ class PIDControllerGUI:
         self.current_setpoint = setpoint
         return True
 
+
+## @brief Application entry point.
+#
+#  This block creates the Tkinter root window, initializes the PID controller GUI
+#  and starts the Tkinter event loop.
 if __name__ == "__main__":
     root = tk.Tk()
     app = PIDControllerGUI(root)

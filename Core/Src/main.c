@@ -35,23 +35,72 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+/**
+ * @brief ADC voltage step size for 12-bit ADC conversion.
+ *
+ * This macro converts a raw ADC value into a voltage value using
+ * the 3.3 V reference voltage and 12-bit ADC resolution.
+ */
 #define VSTEP 					3.3/4096
+
+/**
+ * @brief UART transmit buffer size in bytes.
+ */
 #define TX_BUFFER_SIZE 			64
+
+/**
+ * @brief UART receive command buffer size in bytes.
+ */
 #define RX_BUFFER_SIZE          64
 
+/**
+ * @brief Long UART command prefix used to set the PID setpoint.
+ */
 #define CMD_SETPOINT_LONG       "SETPOINT:"
+
+/**
+ * @brief Short UART command prefix used to set the PID setpoint.
+ */
 #define CMD_SETPOINT_SHORT      "SET_SP:"
 
+/**
+ * @brief Long UART command prefix used to set the proportional gain.
+ */
 #define CMD_KP_LONG             "KP:"
+
+/**
+ * @brief Short UART command prefix used to set the proportional gain.
+ */
 #define CMD_KP_SHORT            "SET_KP:"
 
+/**
+ * @brief Long UART command prefix used to set the integral gain.
+ */
 #define CMD_KI_LONG             "KI:"
+
+/**
+ * @brief Short UART command prefix used to set the integral gain.
+ */
 #define CMD_KI_SHORT            "SET_KI:"
 
+/**
+ * @brief Long UART command prefix used to set the derivative gain.
+ */
 #define CMD_KD_LONG             "KD:"
+
+/**
+ * @brief Short UART command prefix used to set the derivative gain.
+ */
 #define CMD_KD_SHORT            "SET_KD:"
 
+/**
+ * @brief UART command used to enable PID control.
+ */
 #define CMD_START               "START"
+
+/**
+ * @brief UART command used to disable PID control.
+ */
 #define CMD_STOP                "STOP"
 
 /* USER CODE END PD */
@@ -70,15 +119,50 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
+/**
+ * @brief PID controller instance used by the application.
+ */
 PID_Controller_t pid;
+
+/**
+ * @brief Latest raw ADC conversion value.
+ *
+ * This variable is declared as volatile because it stores hardware-related
+ * ADC data that may be updated during runtime.
+ */
 volatile uint32_t adcValue = 0;
+
+/**
+ * @brief Calculated input voltage value converted from the ADC reading.
+ */
 float voltage = 0;
+
+/**
+ * @brief UART transmit buffer used to send PID data to the Python GUI.
+ */
 char uartTXBuffer[TX_BUFFER_SIZE];
 
+/**
+ * @brief Single received UART character used by interrupt-based reception.
+ */
 uint8_t rxChar;
+
+/**
+ * @brief UART receive buffer used to store incoming command strings.
+ */
 char messageBuffer[RX_BUFFER_SIZE];
+
+/**
+ * @brief Current index position inside the UART receive buffer.
+ */
 uint8_t bufferIndex = 0;
 
+/**
+ * @brief PID controller enable flag.
+ *
+ * When this flag is set to 1, the PID output is computed.
+ * When this flag is set to 0, the PID output is forced to zero.
+ */
 volatile uint8_t pidEnabled = 0;
 /* USER CODE END PV */
 
@@ -89,16 +173,61 @@ static void MX_USART2_UART_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_DAC_Init(void);
 /* USER CODE BEGIN PFP */
+
+/**
+ * @brief Redirects printf output to the ITM debug interface.
+ *
+ * @param file File descriptor parameter required by the low-level write function.
+ * @param ptr Pointer to the data buffer to be written.
+ * @param len Number of bytes to write.
+ * @return Number of bytes written.
+ */
 int _write(int file, char *ptr, int len);
+
+/**
+ * @brief Reads the ADC value and converts it to voltage.
+ *
+ * @param hadc Pointer to the ADC handle.
+ * @param adcValue Pointer to the variable where the raw ADC value will be stored.
+ * @return Converted voltage value.
+ */
 float readVoltage(ADC_HandleTypeDef *hadc, volatile uint32_t *adcValue);
+
+/**
+ * @brief Maps a percentage value to a 12-bit DAC value.
+ *
+ * @param percent Percentage value between 0.0 and 100.0.
+ * @return Corresponding 12-bit DAC value between 0 and 4095.
+ */
 uint16_t mapPercentageToDAC(float percent);
+
+/**
+ * @brief Processes a UART command received from the GUI.
+ *
+ * @param command Pointer to the null-terminated command string.
+ */
 void ProcessUARTCommand(char *command);
+
+/**
+ * @brief Clears the UART receive buffer and resets its index.
+ */
 void ClearUARTBuffer(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/**
+ * @brief Redirects printf output to the ITM debug interface.
+ *
+ * This function is used by the C standard library when printf is called.
+ * Each character in the provided buffer is sent through ITM_SendChar.
+ *
+ * @param file File descriptor parameter required by the low-level write function.
+ * @param ptr Pointer to the character buffer to be transmitted.
+ * @param len Number of characters to transmit.
+ * @return Number of transmitted characters.
+ */
 int _write(int file, char *ptr, int len) {
 	int i = 0;
 	for (i = 0; i < len; i++) {
@@ -107,6 +236,17 @@ int _write(int file, char *ptr, int len) {
 	return len;
 }
 
+/**
+ * @brief Reads the ADC input and converts the raw value into voltage.
+ *
+ * This function starts ADC conversion, waits for conversion completion,
+ * reads the raw ADC value, stops the ADC and calculates the corresponding
+ * voltage using the defined ADC voltage step.
+ *
+ * @param hadc Pointer to the ADC handle.
+ * @param adcValue Pointer to the variable where the raw ADC result will be stored.
+ * @return Converted voltage value.
+ */
 float readVoltage(ADC_HandleTypeDef *hadc, volatile uint32_t *adcValue) {
 	float voltage;
 
@@ -121,6 +261,15 @@ float readVoltage(ADC_HandleTypeDef *hadc, volatile uint32_t *adcValue) {
 	return voltage;
 }
 
+/**
+ * @brief Converts a percentage value into a 12-bit DAC output value.
+ *
+ * The input percentage is limited between 0.0 and 100.0 before conversion.
+ * The result is scaled to the 12-bit DAC range from 0 to 4095.
+ *
+ * @param percent Percentage value to be converted.
+ * @return 12-bit DAC value corresponding to the given percentage.
+ */
 uint16_t mapPercentageToDAC(float percent) {
 	if (percent > 100.0f) {
 		percent = 100.0f;
@@ -167,10 +316,29 @@ int main(void) {
 	MX_ADC1_Init();
 	MX_DAC_Init();
 	/* USER CODE BEGIN 2 */
+	/**
+	 * @brief Initializes the PID controller with default gain values and limits.
+	 */
 	PID_Init(&pid, 20.0f, 15.0f, 0.2f, 0.1f, 0.0f, 100.0f);
+
+	/**
+	 * @brief Sets the initial PID setpoint value.
+	 */
 	PID_SetPoint(&pid, 2.5f);
+
+	/**
+	 * @brief Starts DAC channel 1 for analog output generation.
+	 */
 	HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
+
+	/**
+	 * @brief Stores the initial system tick value for periodic timing control.
+	 */
 	uint32_t lastTime = HAL_GetTick();
+
+	/**
+	 * @brief Starts interrupt-based UART reception for one character.
+	 */
 	HAL_UART_Receive_IT(&huart2, &rxChar, 1);
 	/* USER CODE END 2 */
 
@@ -181,31 +349,64 @@ int main(void) {
 
 		/* USER CODE BEGIN 3 */
 
+		/**
+		 * @brief Gets the current system tick value for periodic PID execution.
+		 */
 		uint32_t currentTime = HAL_GetTick();
+
+		/**
+		 * @brief Executes the PID control loop every 100 ms.
+		 */
 		if (currentTime - lastTime >= 100) {
+			/**
+			 * @brief Reads the current process voltage from the ADC.
+			 */
 			voltage = readVoltage(&hadc1, &adcValue);
+
+			/**
+			 * @brief Computes the PID output when PID control is enabled.
+			 */
 			if (pidEnabled) {
 				pid.output = PID_Compute(&pid, voltage);
 			} else {
 				pid.output = 0.0f;
 			}
 
+			/**
+			 * @brief Writes the PID output percentage to DAC channel 1.
+			 */
 			HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R,
 					mapPercentageToDAC(pid.output));
 
+			/**
+			 * @brief Sends PID data to the ITM debug console.
+			 */
 			printf("SetPoint: %.3f Voltage: %.4f PIDOutput: %.3f\r\n",
 					pid.setPoint, voltage, pid.output);
+
+			/**
+			 * @brief Formats PID data into the UART transmit buffer.
+			 */
 			snprintf(uartTXBuffer, sizeof(uartTXBuffer),
 					"SetPoint: %.3f Voltage: %.4f PIDOutput: %.3f\r\n",
 					pid.setPoint, voltage, pid.output);
 
+			/**
+			 * @brief Transmits PID data to the Python GUI over UART.
+			 */
 			HAL_UART_Transmit(&huart2, (uint8_t*) uartTXBuffer,
 					strlen(uartTXBuffer), HAL_MAX_DELAY);
 
+			/**
+			 * @brief Updates the last execution time of the PID loop.
+			 */
 			lastTime = currentTime;
 		}
-		HAL_Delay(5);
 
+		/**
+		 * @brief Adds a short delay to reduce continuous CPU polling load.
+		 */
+		HAL_Delay(5);
 	}
 	/* USER CODE END 3 */
 }
@@ -409,11 +610,37 @@ static void MX_GPIO_Init(void) {
 
 /* USER CODE BEGIN 4 */
 
+/**
+ * @brief Clears the UART receive buffer.
+ *
+ * This function resets the receive buffer index and clears all bytes in
+ * the UART command buffer.
+ */
 void ClearUARTBuffer(void) {
 	bufferIndex = 0;
 	memset(messageBuffer, 0, RX_BUFFER_SIZE);
 }
 
+/**
+ * @brief Processes UART commands received from the Python GUI.
+ *
+ * This function checks the received command string and updates PID parameters
+ * or PID enable state according to the command content.
+ *
+ * Supported commands:
+ * - SETPOINT:
+ * - SET_SP:
+ * - KP:
+ * - SET_KP:
+ * - KI:
+ * - SET_KI:
+ * - KD:
+ * - SET_KD:
+ * - START
+ * - STOP
+ *
+ * @param command Pointer to the received null-terminated UART command string.
+ */
 void ProcessUARTCommand(char *command) {
 	if (strncmp(command, CMD_SETPOINT_LONG, strlen(CMD_SETPOINT_LONG)) == 0) {
 		float userSetPoint = atof(command + strlen(CMD_SETPOINT_LONG));
@@ -447,6 +674,16 @@ void ProcessUARTCommand(char *command) {
 	}
 }
 
+/**
+ * @brief UART receive complete callback.
+ *
+ * This callback is triggered when one character is received over UART.
+ * Incoming characters are stored in the message buffer until a line ending
+ * character is received. When a complete command is detected, the command
+ * is processed and the buffer is cleared.
+ *
+ * @param huart Pointer to the UART handle that triggered the callback.
+ */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART2) {
 
