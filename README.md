@@ -545,6 +545,10 @@ Steady State Error: 0.0036 V
 
 The exact values depend on the physical system, PID gains, setpoint, ADC noise, and DAC output behavior.
 
+Example Output:
+
+<img width="772" height="616" alt="image" src="https://github.com/user-attachments/assets/db6eebbd-5b08-4429-87d3-ddbf564512d7" />
+
 ---
 
 ## Response Metrics
